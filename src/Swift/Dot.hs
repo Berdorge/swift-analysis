@@ -41,7 +41,7 @@ cfgStatements functions callEdges isDdg =
                 showCfgEdge (Cfg.Edge label from to) =
                     showEdge (GlobalNodeId fId from)
                         (GlobalNodeId fId to)
-                        (styleAttrs from ++ edgeColor label ++ [Attribute "constraint" "false" | from >= to])
+                        (styleAttrs from ++ edgeColor label)
             in showFunctionGraph fId function
                 (map (showNode fId reachable) (cfgNodes cfg) ++ map showCfgEdge (cfgEdges cfg))
         showCallEdge (FunctionCallEdge callerId nodeId calleeId) =

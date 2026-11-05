@@ -1,5 +1,4 @@
-{-# LANGUAGE LambdaCase    #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Swift.Cfg
     ( buildProgramCfg
@@ -24,7 +23,7 @@ module Swift.Cfg
     ) where
 
 import Control.Arrow ((>>>))
-import Control.Monad.State (State, forM, forM_, gets, modify, runState, state, void)
+import Control.Monad.State (State, forM, forM_, modify, runState, state, void)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Swift.Syntax (Arg (Arg), Block, CondBlock (..),
@@ -142,7 +141,7 @@ data EdgeLabel = Unconditional | IfTrue | IfFalse
 
 buildFunction :: Function -> State FunctionCfgState NodeId
 buildFunction (Function _ params _ statements) = do
-    nodeId <- addNode (CfgEntryParams $ map (\(Param _ paramId _) -> paramId) params)
+    nodeId <- appendNode (CfgEntryParams $ map (\(Param _ paramId _) -> paramId) params)
     addPendingConnection nodeId
     buildBlock statements
     return nodeId
@@ -154,7 +153,7 @@ buildStmt :: Stmt -> State FunctionCfgState ()
 buildStmt = \case
     If firstCond elseIfs elseBranch -> do
         nestedPending <- forM (firstCond : elseIfs) $ \(CondBlock condition branch) -> do
-            nodeId <- addNode (CfgCondition condition)
+            nodeId <- appendNode (CfgCondition condition)
             addLabeledPendingConnection nodeId IfTrue
             buildBlock branch
             endBlockPending <- popAllPendingConnections
@@ -164,7 +163,7 @@ buildStmt = \case
         modify $ \cfgState -> cfgState { pendingConnections = concat nestedPending ++ pendingConnections cfgState }
 
     While (CondBlock condition nested) -> do
-        nodeId <- addNode (CfgCondition condition)
+        nodeId <- appendNode (CfgCondition condition)
         parentBreaks <- popAllPendingBreaks
         parentContinues <- popAllPendingContinues
         addLabeledPendingConnection nodeId IfTrue
@@ -178,45 +177,48 @@ buildStmt = \case
         addLabeledPendingConnection nodeId IfFalse
 
     RepeatWhile (CondBlock condition nested) -> do
-        startId <- gets nodeIdCounter
+        condId <- nextNodeId
         parentBreaks <- popAllPendingBreaks
         parentContinues <- popAllPendingContinues
 
+        addLabeledPendingConnection condId IfTrue
         buildBlock nested
 
         consumeAndSetPendingContinues parentContinues
-        condId <- addNode (CfgCondition condition)
-
-        addLabeledPendingConnection condId IfTrue
-        consumePendingConnections startId
+        addNode condId (CfgCondition condition)
 
         consumeAndSetPendingBreaks parentBreaks
         addLabeledPendingConnection condId IfFalse
 
     statement@(Return _) ->
-        void $ addNode (CfgStmt statement)
+        void $ appendNode (CfgStmt statement)
 
-    statement@Break -> do
-        nodeId <- addNode (CfgStmt statement)
-        addPendingBreaks [nodeId]
+    Break -> do
+        pending <- popAllPendingConnections
+        addPendingBreaks pending
 
-    statement@Continue -> do
-        nodeId <- addNode (CfgStmt statement)
-        addPendingContinues [nodeId]
+    Continue -> do
+        pending <- popAllPendingConnections
+        addPendingContinues pending
 
     statement -> do
-        nodeId <- addNode (CfgStmt statement)
+        nodeId <- appendNode (CfgStmt statement)
         addPendingConnection nodeId
 
-addNode :: NodeData -> State FunctionCfgState NodeId
-addNode nodeData = do
-    nodeId <- gets nodeIdCounter
-    modify $ \cfgState -> cfgState
-        { nodeIdCounter = nodeId + 1
-        , nodes = Node nodeId nodeData : nodes cfgState
-        }
-    consumePendingConnections nodeId
+appendNode :: NodeData -> State FunctionCfgState NodeId
+appendNode nodeData = do
+    nodeId <- nextNodeId
+    addNode nodeId nodeData
     return nodeId
+
+nextNodeId :: State FunctionCfgState NodeId
+nextNodeId = state $ \cfgState ->
+    (nodeIdCounter cfgState, cfgState { nodeIdCounter = nodeIdCounter cfgState + 1 })
+
+addNode :: NodeId -> NodeData -> State FunctionCfgState ()
+addNode nodeId nodeData = do
+    modify $ \cfgState -> cfgState { nodes = Node nodeId nodeData : nodes cfgState }
+    consumePendingConnections nodeId
 
 addPendingConnection :: NodeId -> State FunctionCfgState ()
 addPendingConnection nodeId = addLabeledPendingConnection nodeId Unconditional
@@ -229,19 +231,19 @@ popAllPendingConnections :: State FunctionCfgState [(NodeId, EdgeLabel)]
 popAllPendingConnections = state $ \cfgState ->
     (pendingConnections cfgState, cfgState { pendingConnections = [] })
 
-addPendingBreaks :: [NodeId] -> State FunctionCfgState ()
-addPendingBreaks nodeIds = modify $ \cfgState ->
-    cfgState { pendingBreaks = nodeIds ++ pendingBreaks cfgState }
+addPendingBreaks :: [(NodeId, EdgeLabel)] -> State FunctionCfgState ()
+addPendingBreaks pending = modify $ \cfgState ->
+    cfgState { pendingBreaks = pending ++ pendingBreaks cfgState }
 
-addPendingContinues :: [NodeId] -> State FunctionCfgState ()
-addPendingContinues nodeIds = modify $ \cfgState ->
-    cfgState { pendingContinues = nodeIds ++ pendingContinues cfgState }
+addPendingContinues :: [(NodeId, EdgeLabel)] -> State FunctionCfgState ()
+addPendingContinues pending = modify $ \cfgState ->
+    cfgState { pendingContinues = pending ++ pendingContinues cfgState }
 
-popAllPendingBreaks :: State FunctionCfgState [NodeId]
+popAllPendingBreaks :: State FunctionCfgState [(NodeId, EdgeLabel)]
 popAllPendingBreaks = state $ \cfgState ->
     (pendingBreaks cfgState, cfgState { pendingBreaks = [] })
 
-popAllPendingContinues :: State FunctionCfgState [NodeId]
+popAllPendingContinues :: State FunctionCfgState [(NodeId, EdgeLabel)]
 popAllPendingContinues = state $ \cfgState ->
     (pendingContinues cfgState, cfgState { pendingContinues = [] })
 
@@ -251,16 +253,16 @@ consumePendingConnections nodeId = do
     let newEdges = map (\(sourceId, label) -> Edge label sourceId nodeId) pending
     modify $ \cfgState -> cfgState { edges = newEdges ++ edges cfgState }
 
-consumeAndSetPendingBreaks :: [NodeId] -> State FunctionCfgState ()
+consumeAndSetPendingBreaks :: [(NodeId, EdgeLabel)] -> State FunctionCfgState ()
 consumeAndSetPendingBreaks parentBreaks = modify $ \cfgState -> cfgState
     { pendingBreaks = parentBreaks
-    , pendingConnections = map (, Unconditional) (pendingBreaks cfgState) ++ pendingConnections cfgState
+    , pendingConnections = pendingBreaks cfgState ++ pendingConnections cfgState
     }
 
-consumeAndSetPendingContinues :: [NodeId] -> State FunctionCfgState ()
+consumeAndSetPendingContinues :: [(NodeId, EdgeLabel)] -> State FunctionCfgState ()
 consumeAndSetPendingContinues parentContinues = modify $ \cfgState -> cfgState
     { pendingContinues = parentContinues
-    , pendingConnections = map (, Unconditional) (pendingContinues cfgState) ++ pendingConnections cfgState
+    , pendingConnections = pendingContinues cfgState ++ pendingConnections cfgState
     }
 
 data FunctionCfgState = FunctionCfgState
@@ -268,6 +270,6 @@ data FunctionCfgState = FunctionCfgState
     , nodes              :: [Node]
     , edges              :: [Edge]
     , pendingConnections :: [(NodeId, EdgeLabel)]
-    , pendingBreaks      :: [NodeId]
-    , pendingContinues   :: [NodeId]
+    , pendingBreaks      :: [(NodeId, EdgeLabel)]
+    , pendingContinues   :: [(NodeId, EdgeLabel)]
     }
