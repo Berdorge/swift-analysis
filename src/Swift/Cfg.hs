@@ -111,7 +111,6 @@ type NodeId = Int
 data NodeData = CfgEntryParams [Id]
     | CfgStmt Stmt
     | CfgCondition Expr
-    | CfgRepeatStart
     deriving (Show, Eq)
 
 data Edge = Edge EdgeLabel NodeId NodeId
@@ -170,8 +169,7 @@ buildStmt (While (CondBlock condition nested)) = do
     addLabeledPendingConnection nodeId IfFalse
 
 buildStmt (RepeatWhile (CondBlock condition nested)) = do
-    startId <- addNode CfgRepeatStart
-    addPendingConnection startId
+    startId <- gets nodeIdCounter
     buildBlock nested
     condId <- addNode (CfgCondition condition)
     addLabeledPendingConnection condId IfTrue

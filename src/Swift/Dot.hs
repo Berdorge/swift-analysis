@@ -29,10 +29,10 @@ ddgToDot (ProgramDdg functions callEdges) =
 
 cfgStatements :: [Cfg.FunctionNode] -> [FunctionCallEdge] -> Bool -> [String]
 cfgStatements functions callEdges isDdg =
-    let edgeLabel = \case
+    let edgeColor = \case
             Unconditional -> []
-            IfTrue -> [Attribute "label" "true"]
-            IfFalse -> [Attribute "label" "false"]
+            IfTrue -> [Attribute "color" "green"]
+            IfFalse -> [Attribute "color" "red"]
         showFunction (Cfg.FunctionNode fId function cfg) =
             let reachable = findReachable cfg
                 styleAttrs from = if isDdg
@@ -41,7 +41,7 @@ cfgStatements functions callEdges isDdg =
                 showCfgEdge (Cfg.Edge label from to) =
                     showEdge (GlobalNodeId fId from)
                         (GlobalNodeId fId to)
-                        (styleAttrs from ++ edgeLabel label)
+                        (styleAttrs from ++ edgeColor label)
             in showFunctionGraph fId function
                 (map (showNode fId reachable) (cfgNodes cfg) ++ map showCfgEdge (cfgEdges cfg))
         showCallEdge (FunctionCallEdge callerId nodeId calleeId) =
@@ -85,7 +85,6 @@ showNode fId reachable (Node nodeId nodeData) =
     let shape = case nodeData of
             (CfgCondition _)   -> [Attribute "shape" "diamond"]
             (CfgEntryParams _) -> [Attribute "shape" "oval"]
-            CfgRepeatStart     -> [Attribute "shape" "circle"]
             _                  -> []
         color = if Set.member nodeId reachable
             then []
@@ -125,7 +124,6 @@ nodeLabel = \case
     CfgEntryParams params -> "entry(" ++ intercalate ", " params ++ ")"
     CfgStmt stmt          -> showStmt stmt
     CfgCondition expr     -> showExpr expr
-    CfgRepeatStart        -> "repeat"
 
 showStmt :: Stmt -> String
 showStmt = \case
