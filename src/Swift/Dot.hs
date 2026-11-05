@@ -41,7 +41,7 @@ cfgStatements functions callEdges isDdg =
                 showCfgEdge (Cfg.Edge label from to) =
                     showEdge (GlobalNodeId fId from)
                         (GlobalNodeId fId to)
-                        (styleAttrs from ++ edgeColor label)
+                        (styleAttrs from ++ edgeColor label ++ [Attribute "constraint" "false" | from >= to])
             in showFunctionGraph fId function
                 (map (showNode fId reachable) (cfgNodes cfg) ++ map showCfgEdge (cfgEdges cfg))
         showCallEdge (FunctionCallEdge callerId nodeId calleeId) =
@@ -134,6 +134,8 @@ showStmt = \case
     ExprStmt expr                -> showExpr expr
     Return Nothing               -> "return"
     Return (Just expr)           -> "return " ++ showExpr expr
+    Break                        -> "break"
+    Continue                     -> "continue"
     If {}                        -> "if"
     While _                      -> "while"
     RepeatWhile _                -> "repeat"

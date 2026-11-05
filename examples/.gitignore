@@ -1,0 +1,5 @@
+# Graphs written by the analyser next to each input
+*.swift.cfg.dot
+*.swift.cfg.png
+*.swift.ddg.dot
+*.swift.ddg.png

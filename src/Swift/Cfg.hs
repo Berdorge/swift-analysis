@@ -1,4 +1,5 @@
-{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE LambdaCase    #-}
+{-# LANGUAGE TupleSections #-}
 
 module Swift.Cfg
     ( buildProgramCfg
@@ -97,7 +98,7 @@ data Callee = Callee Id [Maybe Id]
 
 buildFunctionCfg :: Function -> FunctionCfg
 buildFunctionCfg function =
-    let (entryId, finalState) = runState (buildFunction function) (FunctionCfgState 0 [] [] [])
+    let (entryId, finalState) = runState (buildFunction function) (FunctionCfgState 0 [] [] [] [] [])
     in FunctionCfg entryId (nodes finalState) (edges finalState)
 
 data FunctionCfg = FunctionCfg { cfgEntryId :: NodeId, cfgNodes :: [Node], cfgEdges :: [Edge] }
@@ -150,38 +151,62 @@ buildBlock :: Block -> State FunctionCfgState ()
 buildBlock = mapM_ buildStmt
 
 buildStmt :: Stmt -> State FunctionCfgState ()
-buildStmt (If firstCond elseIfs elseBranch) = do
-    nestedPending <- forM (firstCond : elseIfs) $ \(CondBlock condition branch) -> do
+buildStmt = \case
+    If firstCond elseIfs elseBranch -> do
+        nestedPending <- forM (firstCond : elseIfs) $ \(CondBlock condition branch) -> do
+            nodeId <- addNode (CfgCondition condition)
+            addLabeledPendingConnection nodeId IfTrue
+            buildBlock branch
+            endBlockPending <- popAllPendingConnections
+            addLabeledPendingConnection nodeId IfFalse
+            return endBlockPending
+        forM_ elseBranch buildBlock
+        modify $ \cfgState -> cfgState { pendingConnections = concat nestedPending ++ pendingConnections cfgState }
+
+    While (CondBlock condition nested) -> do
         nodeId <- addNode (CfgCondition condition)
+        parentBreaks <- popAllPendingBreaks
+        parentContinues <- popAllPendingContinues
         addLabeledPendingConnection nodeId IfTrue
-        buildBlock branch
-        endBlockPending <- popAllPendingConnections
+
+        buildBlock nested
+
+        consumeAndSetPendingContinues parentContinues
+        consumePendingConnections nodeId
+
+        consumeAndSetPendingBreaks parentBreaks
         addLabeledPendingConnection nodeId IfFalse
-        return endBlockPending
-    forM_ elseBranch buildBlock
-    modify $ \cfgState -> cfgState { pendingConnections = concat nestedPending ++ pendingConnections cfgState }
 
-buildStmt (While (CondBlock condition nested)) = do
-    nodeId <- addNode (CfgCondition condition)
-    addLabeledPendingConnection nodeId IfTrue
-    buildBlock nested
-    consumePendingConnections nodeId
-    addLabeledPendingConnection nodeId IfFalse
+    RepeatWhile (CondBlock condition nested) -> do
+        startId <- gets nodeIdCounter
+        parentBreaks <- popAllPendingBreaks
+        parentContinues <- popAllPendingContinues
 
-buildStmt (RepeatWhile (CondBlock condition nested)) = do
-    startId <- gets nodeIdCounter
-    buildBlock nested
-    condId <- addNode (CfgCondition condition)
-    addLabeledPendingConnection condId IfTrue
-    consumePendingConnections startId
-    addLabeledPendingConnection condId IfFalse
+        buildBlock nested
 
-buildStmt statement@(Return _) = do
-    void $ addNode (CfgStmt statement)
+        consumeAndSetPendingContinues parentContinues
+        condId <- addNode (CfgCondition condition)
 
-buildStmt statement = do
-    nodeId <- addNode (CfgStmt statement)
-    addPendingConnection nodeId
+        addLabeledPendingConnection condId IfTrue
+        consumePendingConnections startId
+
+        consumeAndSetPendingBreaks parentBreaks
+        addLabeledPendingConnection condId IfFalse
+
+    statement@(Return _) ->
+        void $ addNode (CfgStmt statement)
+
+    statement@Break -> do
+        nodeId <- addNode (CfgStmt statement)
+        addPendingBreaks [nodeId]
+
+    statement@Continue -> do
+        nodeId <- addNode (CfgStmt statement)
+        addPendingContinues [nodeId]
+
+    statement -> do
+        nodeId <- addNode (CfgStmt statement)
+        addPendingConnection nodeId
 
 addNode :: NodeData -> State FunctionCfgState NodeId
 addNode nodeData = do
@@ -204,15 +229,45 @@ popAllPendingConnections :: State FunctionCfgState [(NodeId, EdgeLabel)]
 popAllPendingConnections = state $ \cfgState ->
     (pendingConnections cfgState, cfgState { pendingConnections = [] })
 
+addPendingBreaks :: [NodeId] -> State FunctionCfgState ()
+addPendingBreaks nodeIds = modify $ \cfgState ->
+    cfgState { pendingBreaks = nodeIds ++ pendingBreaks cfgState }
+
+addPendingContinues :: [NodeId] -> State FunctionCfgState ()
+addPendingContinues nodeIds = modify $ \cfgState ->
+    cfgState { pendingContinues = nodeIds ++ pendingContinues cfgState }
+
+popAllPendingBreaks :: State FunctionCfgState [NodeId]
+popAllPendingBreaks = state $ \cfgState ->
+    (pendingBreaks cfgState, cfgState { pendingBreaks = [] })
+
+popAllPendingContinues :: State FunctionCfgState [NodeId]
+popAllPendingContinues = state $ \cfgState ->
+    (pendingContinues cfgState, cfgState { pendingContinues = [] })
+
 consumePendingConnections :: NodeId -> State FunctionCfgState ()
 consumePendingConnections nodeId = do
     pending <- popAllPendingConnections
     let newEdges = map (\(sourceId, label) -> Edge label sourceId nodeId) pending
     modify $ \cfgState -> cfgState { edges = newEdges ++ edges cfgState }
 
+consumeAndSetPendingBreaks :: [NodeId] -> State FunctionCfgState ()
+consumeAndSetPendingBreaks parentBreaks = modify $ \cfgState -> cfgState
+    { pendingBreaks = parentBreaks
+    , pendingConnections = map (, Unconditional) (pendingBreaks cfgState) ++ pendingConnections cfgState
+    }
+
+consumeAndSetPendingContinues :: [NodeId] -> State FunctionCfgState ()
+consumeAndSetPendingContinues parentContinues = modify $ \cfgState -> cfgState
+    { pendingContinues = parentContinues
+    , pendingConnections = map (, Unconditional) (pendingContinues cfgState) ++ pendingConnections cfgState
+    }
+
 data FunctionCfgState = FunctionCfgState
     { nodeIdCounter      :: NodeId
     , nodes              :: [Node]
     , edges              :: [Edge]
     , pendingConnections :: [(NodeId, EdgeLabel)]
+    , pendingBreaks      :: [NodeId]
+    , pendingContinues   :: [NodeId]
     }

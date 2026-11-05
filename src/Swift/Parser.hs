@@ -101,6 +101,8 @@ pStmt = choice
     , While <$> (keyword "while" *> pCondBlock)
     , pRepeatWhile
     , pReturn
+    , Break <$ keyword "break"
+    , Continue <$ keyword "continue"
     , try pAssignment
     , ExprStmt <$> pExpr
     ] <* optional (symbol ";")

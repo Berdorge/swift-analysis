@@ -71,6 +71,8 @@ data Stmt = VarDecl Id (Maybe Type) Expr
     -- | @repeat {..} while c@: the body runs before the condition.
     | RepeatWhile CondBlock
     | Return (Maybe Expr)
+    | Break
+    | Continue
     deriving (Eq, Show)
 
 type Block = [Stmt]
