@@ -9,6 +9,9 @@ Inputs for testing the analyser, roughly ordered by difficulty.
   `while true`, and with unreachable code right after them.
 - `11`–`14`: several functions per file: overloading by argument labels, recursion,
   a small program of functions calling each other, and calls from dead code.
+- `15`–`17`: `for`-`in` over `..<` and `...` ranges, with `_`, with `break` and `continue` in
+  nested loops, and over an array and a `stride(..)` call.
+- `18`: method calls, `nil` and postfix `!`; every method is assumed to mutate its receiver.
 
 Every function in a file is analysed and drawn in its own box; call edges connect a call to the
 callee's entry.

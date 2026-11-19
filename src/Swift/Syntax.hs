@@ -42,18 +42,27 @@ data BinOp = Add
     | Geq
     | And
     | Or
+    -- | @a ..< b@
+    | HalfOpenRange
+    -- | @a ... b@
+    | ClosedRange
     deriving (Eq, Ord, Show)
 
 data Expr = IntLit Integer
     | BoolLit Bool
+    | NilLit
     | Var Id
     | Unary UnOp Expr
     | Binary BinOp Expr Expr
+    -- | @x!@
+    | ForceUnwrap Expr
     | Call Id [Arg]
+    -- | @receiver.name(args)@. Any method may mutate its receiver.
+    | MethodCall Expr Id [Arg]
     deriving (Eq, Show)
 
 -- | A call argument with its optional label: @f(x, by: 2)@.
-data Arg = Arg (Maybe Id) Expr
+data Arg = Arg { argLabel :: Maybe Id, argExpr :: Expr }
     deriving (Eq, Show)
 
 data CondBlock = CondBlock Expr Block
@@ -70,6 +79,8 @@ data Stmt = VarDecl Id (Maybe Type) Expr
     | While CondBlock
     -- | @repeat {..} while c@: the body runs before the condition.
     | RepeatWhile CondBlock
+    -- | @for x in seq {..}@: the variable is 'Nothing' for @_@.
+    | ForIn (Maybe Id) Expr Block
     | Return (Maybe Expr)
     | Break
     | Continue

@@ -139,6 +139,7 @@ showStmt = \case
     If {}                        -> "if"
     While _                      -> "while"
     RepeatWhile _                -> "repeat"
+    ForIn {}                     -> "for"
 
 showAnnotation :: Maybe Type -> String
 showAnnotation = maybe "" ((": " ++) . showType)
@@ -157,12 +158,21 @@ showExpr = \case
     Var varId         -> varId
     Unary op expr     -> showUnOp op ++ showOperand expr
     Binary op lhs rhs -> showOperand lhs ++ " " ++ showBinOp op ++ " " ++ showOperand rhs
+    NilLit            -> "nil"
+    ForceUnwrap expr  -> showReceiver expr ++ "!"
     Call name args    -> name ++ "(" ++ intercalate ", " (map showArg args) ++ ")"
+    MethodCall receiver name args ->
+        showReceiver receiver ++ "." ++ name ++ "(" ++ intercalate ", " (map showArg args) ++ ")"
 
 showOperand :: Expr -> String
 showOperand = \case
     expr@(Binary {}) -> "(" ++ showExpr expr ++ ")"
     expr             -> showExpr expr
+
+showReceiver :: Expr -> String
+showReceiver = \case
+    expr@(Unary {}) -> "(" ++ showExpr expr ++ ")"
+    expr            -> showOperand expr
 
 showArg :: Arg -> String
 showArg (Arg label expr) = maybe "" (++ ": ") label ++ showExpr expr
@@ -187,6 +197,8 @@ showBinOp = \case
     Geq -> ">="
     And -> "&&"
     Or  -> "||"
+    HalfOpenRange -> "..<"
+    ClosedRange   -> "..."
 
 data Attribute = Attribute String String
 

@@ -15,7 +15,7 @@ import qualified Data.Set as Set
 import qualified Swift.Cfg as Cfg
 import Swift.Cfg (FunctionCallEdge, FunctionCfg, Node (..), NodeData (..), NodeId, ProgramCfg (..),
                   cfgNodes, findPredecessors)
-import Swift.Syntax (Arg (Arg), Expr (..), Id, Stmt (..))
+import Swift.Syntax (Arg (argExpr), Expr (..), Id, Stmt (..))
 
 buildProgramDdg :: ProgramCfg -> ProgramDdg
 buildProgramDdg (ProgramCfg functions callEdges) =
@@ -52,12 +52,15 @@ propagateNodeReachingDefs cfg (Node nodeId nodeData) reachingDefs =
 
 nodeDefines :: NodeData -> [Id]
 nodeDefines = \case
-    (CfgEntryParams params)              -> params
-    (CfgStmt (VarDecl varId _ _))        -> [varId]
-    (CfgStmt (LetDecl varId _ _))        -> [varId]
-    (CfgStmt (Assign varId _))           -> [varId]
-    (CfgStmt (CompoundAssign _ varId _)) -> [varId]
-    _                                    -> []
+    (CfgEntryParams params)                 -> params
+    (CfgStmt (VarDecl varId _ expr))        -> varId : getMutatedIds expr
+    (CfgStmt (LetDecl varId _ expr))        -> varId : getMutatedIds expr
+    (CfgStmt (Assign varId expr))           -> varId : getMutatedIds expr
+    (CfgStmt (CompoundAssign _ varId expr)) -> varId : getMutatedIds expr
+    (CfgStmt (ExprStmt expr))               -> getMutatedIds expr
+    (CfgStmt (Return (Just expr)))          -> getMutatedIds expr
+    (CfgCondition expr)                     -> getMutatedIds expr
+    _                                       -> []
 
 getDdgEdges :: FunctionCfg -> ReachingDefs -> [Edge]
 getDdgEdges cfg reachingDefs =
@@ -90,10 +93,30 @@ getUsedIds :: Expr -> Set Id
 getUsedIds = \case
     IntLit _ -> Set.empty
     BoolLit _ -> Set.empty
+    NilLit -> Set.empty
     Var varId -> Set.singleton varId
     Unary _ expr -> getUsedIds expr
     Binary _ lhs rhs -> getUsedIds lhs <> getUsedIds rhs
-    Call _ args -> foldMap (\(Arg _ expr) -> getUsedIds expr) args
+    ForceUnwrap expr -> getUsedIds expr
+    Call _ args -> foldMap (getUsedIds . argExpr) args
+    MethodCall receiver _ args -> getUsedIds receiver <> foldMap (getUsedIds . argExpr) args
+
+getMutatedIds :: Expr -> [Id]
+getMutatedIds = \case
+    Unary _ expr -> getMutatedIds expr
+    Binary _ lhs rhs -> getMutatedIds lhs ++ getMutatedIds rhs
+    ForceUnwrap expr -> getMutatedIds expr
+    Call _ args -> concatMap (getMutatedIds . argExpr) args
+    MethodCall receiver _ args -> getReceiverIds receiver
+        ++ getMutatedIds receiver
+        ++ concatMap (getMutatedIds . argExpr) args
+    _ -> []
+
+getReceiverIds :: Expr -> [Id]
+getReceiverIds = \case
+    Var varId               -> [varId]
+    ForceUnwrap (Var varId) -> [varId]
+    _                       -> []
 
 data FunctionDdg = FunctionDdg [Node] [Edge]
     deriving (Show, Eq)

@@ -23,11 +23,10 @@ module Swift.Cfg
     ) where
 
 import Control.Arrow ((>>>))
-import Control.Monad.State (State, forM, forM_, modify, runState, state, void)
+import Control.Monad.State (State, forM, forM_, gets, modify, runState, state, void)
 import Data.Set (Set)
 import qualified Data.Set as Set
-import Swift.Syntax (Arg (Arg), Block, CondBlock (..),
-                     Expr (Binary, BoolLit, Call, IntLit, Unary, Var), File (File),
+import Swift.Syntax (Arg (..), BinOp (..), Block, CondBlock (..), Expr (..), File (File),
                      Function (Function), Id, Param (Param), Stmt (..))
 
 buildProgramCfg :: File -> ProgramCfg
@@ -75,11 +74,13 @@ getCallees :: Expr -> Set Callee
 getCallees = \case
     IntLit _ -> mempty
     BoolLit _ -> mempty
+    NilLit -> mempty
     Var _ -> mempty
     Unary _ expr -> getCallees expr
     Binary _ lhs rhs -> getCallees lhs <> getCallees rhs
-    Call name args -> let nestedCalls = foldMap (\(Arg _ expr) -> getCallees expr) args in
-        Set.insert (Callee name $ map (\(Arg label _) -> label) args) nestedCalls
+    ForceUnwrap expr -> getCallees expr
+    MethodCall receiver _ args -> getCallees receiver <> foldMap (getCallees . argExpr) args
+    Call name args -> Set.insert (Callee name $ map argLabel args) $ foldMap (getCallees . argExpr) args
 
 data ProgramCfg = ProgramCfg [FunctionNode] [FunctionCallEdge]
 
@@ -190,6 +191,13 @@ buildStmt = \case
         consumeAndSetPendingBreaks parentBreaks
         addLabeledPendingConnection condId IfFalse
 
+    ForIn variable iterable nested -> do
+        loopId <- gets nodeIdCounter
+        buildBlock $ case iterable of
+            Binary HalfOpenRange from to -> buildRangeFor loopId Lt from to variable nested
+            Binary ClosedRange from to   -> buildRangeFor loopId Leq from to variable nested
+            _                            -> buildIteratorFor loopId iterable variable nested
+
     statement@(Return _) ->
         void $ appendNode (CfgStmt statement)
 
@@ -204,6 +212,31 @@ buildStmt = \case
     statement -> do
         nodeId <- appendNode (CfgStmt statement)
         addPendingConnection nodeId
+
+buildRangeFor :: NodeId -> BinOp -> Expr -> Expr -> Maybe Id -> Block -> Block
+buildRangeFor loopId op from to variable body =
+    let index = "$i" ++ show loopId
+        end = "$end" ++ show loopId
+    in [ VarDecl index Nothing from
+       , LetDecl end Nothing to
+       , While $ CondBlock (Binary op (Var index) (Var end)) $
+           maybe [] (\varId -> [LetDecl varId Nothing (Var index)]) variable
+           ++ [CompoundAssign Add index (IntLit 1)]
+           ++ body
+       ]
+
+buildIteratorFor :: NodeId -> Expr -> Maybe Id -> Block -> Block
+buildIteratorFor loopId iterable variable body =
+    let iterator = "$it" ++ show loopId
+        next = "$next" ++ show loopId
+        callNext = MethodCall (Var iterator) "next" []
+    in [ VarDecl iterator Nothing (MethodCall iterable "makeIterator" [])
+       , VarDecl next Nothing callNext
+       , While $ CondBlock (Binary Neq (Var next) NilLit) $
+           maybe [] (\varId -> [LetDecl varId Nothing (ForceUnwrap (Var next))]) variable
+           ++ [Assign next callNext]
+           ++ body
+       ]
 
 appendNode :: NodeData -> State FunctionCfgState NodeId
 appendNode nodeData = do

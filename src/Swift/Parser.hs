@@ -100,6 +100,7 @@ pStmt = choice
     , pIf
     , While <$> (keyword "while" *> pCondBlock)
     , pRepeatWhile
+    , pForIn
     , pReturn
     , Break <$ keyword "break"
     , Continue <$ keyword "continue"
@@ -143,6 +144,14 @@ pRepeatWhile = do
     condition <- pExpr
     pure (RepeatWhile (CondBlock condition body))
 
+pForIn :: Parser Stmt
+pForIn = do
+    keyword "for"
+    variable <- (Nothing <$ keyword "_") <|> (Just <$> identifier)
+    keyword "in"
+    iterable <- pExpr
+    ForIn variable iterable <$> pBlock
+
 pReturn :: Parser Stmt
 pReturn = do
     keywordText "return"
@@ -162,6 +171,7 @@ pExpr = makeExprParser pPrimary
     [ [Prefix pPrefixes]
     , [binaryL "*" Mul, binaryL "/" Div, binaryL "%" Rem]
     , [binaryL "+" Add, binaryL "-" Sub]
+    , [binaryN "..<" HalfOpenRange, binaryN "..." ClosedRange]
     , [ binaryN "==" Eq, binaryN "!=" Neq
       , binaryN "<=" Leq, binaryN "<" Lt, binaryN ">=" Geq, binaryN ">" Gt
       ]
@@ -181,10 +191,28 @@ binaryN :: String -> BinOp -> Operator Parser Expr
 binaryN token op = InfixN (Binary op <$ operator token)
 
 pPrimary :: Parser Expr
-pPrimary = choice
+pPrimary = do
+    atom <- pAtom
+    suffixes <- many pSuffix
+    pure (foldl (flip ($)) atom suffixes)
+
+-- | Postfix @!@ and method calls; @.@ must not start a range operator.
+pSuffix :: Parser (Expr -> Expr)
+pSuffix = choice
+    [ ForceUnwrap <$ operator "!"
+    , do
+        void (lexeme (try (char '.' <* notFollowedBy (char '.'))))
+        name <- identifier
+        args <- parens (pArg `sepBy` symbol ",")
+        pure (\receiver -> MethodCall receiver name args)
+    ]
+
+pAtom :: Parser Expr
+pAtom = choice
     [ IntLit <$> lexeme (L.decimal <* notFollowedBy identifierChar)
     , BoolLit True <$ keyword "true"
     , BoolLit False <$ keyword "false"
+    , NilLit <$ keyword "nil"
     , parens pExpr
     , pVariableOrCall
     ]
